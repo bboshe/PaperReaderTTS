@@ -1,0 +1,56 @@
+
+.row-input {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.cat-title {
+    font-weight: bold;
+    font-size: 17px;
+    color: #0054a8;
+}
+
+.label-input {
+    color: #3d4146;
+    flex-grow: 2;
+}
+.checkbox-container {
+    padding-left: 24px;
+    border-left-width: 1px;
+    border-left-style: solid;
+    border-left-color: #bfbfbf;
+}
+
+
+.button-viwer {
+    padding: 4px 20px;
+}
+
+body {
+    width: 400px;
+    padding-right: 20px;
+    overflow-x: hidden;
+    padding-top: 16px;
+    padding-bottom: 16px;
+}
+
+hr {
+    margin-top   : 12px;
+    margin-bottom: 12px;
+    border: none;
+    height: 1px;
+}
+
+input[type="range"] {
+    width: 140px;
+}
+
+input[type="checkbox"] {
+    width : 20px;
+    height: 20px;
+}
+
+output {
+    padding-right: 8px;
+}
