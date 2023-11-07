@@ -124,27 +124,79 @@ export class PageReaderPdf extends PageReaderBase {
 }
 
 export class PageReaderWebsite extends PageReaderBase {
-    *iterSentences() {
-        for (const elem of this.iterElements()) {
-            const text = this.getElementText(elem);
-            let startOffset = 0
-            while (startOffset < text.length) {
-                const splitIndex = this.splitSentence(text.slice(startOffset)) + startOffset;
-                const sentence = text.slice(startOffset, splitIndex);
-                yield {sentence: sentence, elems: [elem], start:startOffset, end:splitIndex};
-                startOffset = splitIndex;
-            } 
+    getElementText(elem) {
+        return elem.textContent;
+    }
+
+    isSentence(text) {
+        text = text.replace(/ +/g, ' '); // remove adjacent spaces
+        const words = text.split(' ');
+        if (words.length < 3) return false;
+        return true;
+    }
+
+    isHeadingElement(element) {
+        return /^H\d$/i.test(element.tagName);
+    }
+
+    *iterParagraph(elem, elems) {
+        const text = elems.map(e => this.getElementText(e)).reduce((a, t) => a + t, '');
+        if (this.isSentence(text) || this.isHeadingElement(elem))
+            yield {sentence: text, elems:elems, start:0, end:elems[elems.length-1].length};
+    }
+
+    *iterElements(elem, adjacent=false, parent=false) {
+        let elems = [];
+        for (const child of elem.childNodes) {
+            if (child.nodeType == Node.TEXT_NODE) 
+                elems.push(child);
+            else {
+                const childElems = Array.from(this.iterElements(child));
+                if (childElems.length == 0) 
+                    elems.push(child);
+                else {
+                    yield* this.iterParagraph(elem, elems);
+                    yield* childElems;
+                    elems = [];
+                }
+            }
         }
+        yield* this.iterParagraph(elem, elems);
+
+        if (adjacent && elem.nextElementSibling) {
+            yield* this.iterElements(elem.nextElementSibling, true, true);
+            return;
+        }
+
+        if (!parent) return;
+        while (elem.parentNode && !elem.parentNode.nextElementSibling) 
+            elem = elem.parentNode;
+
+        if (elem.parentNode) 
+            yield* this.iterElements(elem.parentNode.nextElementSibling, true, true);
+    }
+
+    *iterSentences() {
+        yield* this.iterElements(this.getStartElement(), true, true);
     }
 }
 
+
 export class TextSelectionHighlighter {
+    getTextNode(elem) {
+        if (elem.nodeType == Node.TEXT_NODE)
+            return elem;
+        if (elem.childNodes.length > 0)
+            return this.getTextNode(elem.childNodes[0]);
+        throw "not a text node";
+    }
+
     highlight(elems, start, end) {
         try {
             const first = elems[0]; 
             const last  = elems[elems.length - 1];
-            const firstText = first.childNodes[0];
-            const lastText  = last .childNodes[0];
+            const firstText = this.getTextNode(first);
+            const lastText  = this.getTextNode(last);
             end = end === undefined ? lastText.length : end;
             var range = document.createRange();
             range.setStart(firstText, Math.min(start, firstText.length));
