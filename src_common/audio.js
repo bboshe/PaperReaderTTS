@@ -59,6 +59,8 @@ export class AudioPlayback {
                 this.playbackNode.pitch = this.pitch;
                 this.playbackNode.connect(this.volume > 0.95 ? 
                     this.audioContext.destination : this.gainNode);
+            }).catch(error => {
+                reject();
             });
         })
     }
