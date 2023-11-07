@@ -24,8 +24,9 @@ export class GoogleTranslateTTS {
                 return splits[i].index
         }   }
         splits = [...text.matchAll(/\s/g)];
+        const spliti = Math.min(this.maxChars, text.length/2);
         for (let i = 0; i < splits.length - 1; i++) {
-            if (splits[i+1].index > this.maxChars && splits[i].index <= this.maxChars) {
+            if (splits[i+1].index > spliti && splits[i].index <= spliti) {
                 return splits[i].index
         }   }
         throw "text is too long";
@@ -50,15 +51,9 @@ export class GoogleTranslateTTS {
     }
 
     fetchAudioRaw(text) {
-        return this.fetchText('https://www.google.com/async/translate_tts?' + 
-            new URLSearchParams({
-                'ttsp':	`tl:${this.language},txt:${encodeURIComponent(text)},spd:${this.speed}`
-            }
-        ), {
-            method: 'GET',
-            headers: {},
-        })
-        .then(text => {
+        const url = "https://www.google.com/async/translate_tts?" +
+                    `ttsp=tl:${this.language},txt:${encodeURIComponent(encodeURIComponent(text))},spd:${this.speed}`;
+        return this.fetchText(url) .then(text => {
             const jresp = JSON.parse(text.split("\n")[1]);
             const audioData = jresp['translate_tts']['tts_data'];
             return audioData; 
