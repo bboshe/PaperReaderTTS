@@ -42,12 +42,9 @@ class TTSController {
     }
 
     onDOMLoaded() {
-        console.log("dom loaded");
         document.addEventListener('selectionchange', () => {
             const selection = document.getSelection();
-            console.log("select", selection);
             if (!selection.toString()) {
-                console.log("select stop");
                 this.ttsReader.stop();
             }
         });
@@ -930,6 +927,8 @@ class AudioPlayback {
                 this.playbackNode.pitch = this.pitch;
                 this.playbackNode.connect(this.volume > 0.95 ? 
                     this.audioContext.destination : this.gainNode);
+            }).catch(error => {
+                reject();
             });
         })
     }
@@ -937,29 +936,63 @@ class AudioPlayback {
 
 class GoogleTranslateTTS {
     constructor(_fetch) {
-        this.fetchText = _fetch ?? ((...args) => fetch(...args).then(response => response.text()));
-        this.language = 'en';
-        this.speed     = 1.;
+        this.fetchText    = _fetch ?? this.fetchText;
+        this.language     = 'en';
+        this.speed        = 1.;
+        this.maxChars     = 195;
+        this.filterCommas = false;
+    }
+
+    fetchText(...args) {
+        return fetch(...args).then(response => response.text());
     }
 
     parseAudioData(textData) {
         return Uint8Array.from(atob(textData), (e) => e.charCodeAt(0));
     }
 
-    fetchAudio(text) {
-        return this.fetchText('https://www.google.com/async/translate_tts?' + 
-            new URLSearchParams({
-                'ttsp':	`tl:${this.language},txt:${encodeURIComponent(text)},spd:${this.speed}`
-            }
-        ), {
-            method: 'GET',
-            headers: {},
-        })
-//        .then(response => response.text())
-        .then(text => {
+    splitText(text) {
+        if (text.length < this.maxChars)
+            return text.length
+        let splits = [...text.matchAll(/[\,\?\;\:\!\.]/g)];
+        for (let i = 0; i < splits.length - 1; i++) {
+            if (splits[i+1].index > this.maxChars && splits[i].index <= this.maxChars) {
+                return splits[i].index
+        }   }
+        splits = [...text.matchAll(/\s/g)];
+        const spliti = Math.min(this.maxChars, text.length/2);
+        for (let i = 0; i < splits.length - 1; i++) {
+            if (splits[i+1].index > spliti && splits[i].index <= spliti) {
+                return splits[i].index
+        }   }
+        throw "text is too long";
+    }
+
+    async fetchAudio(text) {
+        text = text.replace(/\s+/g, " "); 
+        if (!text.endsWith("."))
+            text += ".";
+        let audios = "";
+        while (true) {
+            const index = this.splitText(text); 
+            const splitText = text.slice(0       , index+1);
+            text = text.slice(index+2);
+            if (this.filterCommas)
+                splitText = splitText.replace(",", "");
+            audios += await this.fetchAudioRaw(splitText);
+            if (!text)
+                break;
+        } 
+        return this.parseAudioData(audios);
+    }
+
+    fetchAudioRaw(text) {
+        const url = "https://www.google.com/async/translate_tts?" +
+                    `ttsp=tl:${this.language},txt:${encodeURIComponent(encodeURIComponent(text))},spd:${this.speed}`;
+        return this.fetchText(url) .then(text => {
             const jresp = JSON.parse(text.split("\n")[1]);
             const audioData = jresp['translate_tts']['tts_data'];
-            return this.parseAudioData(audioData); 
+            return audioData; 
         })
     }
 }
@@ -1020,27 +1053,79 @@ class PageReaderBase {
 }
 
 class PageReaderWebsite extends PageReaderBase {
-    *iterSentences() {
-        for (const elem of this.iterElements()) {
-            const text = this.getElementText(elem);
-            let startOffset = 0;
-            while (startOffset < text.length) {
-                const splitIndex = this.splitSentence(text.slice(startOffset)) + startOffset;
-                const sentence = text.slice(startOffset, splitIndex);
-                yield {sentence: sentence, elems: [elem], start:startOffset, end:splitIndex};
-                startOffset = splitIndex;
-            } 
+    getElementText(elem) {
+        return elem.textContent;
+    }
+
+    isSentence(text) {
+        text = text.replace(/ +/g, ' '); // remove adjacent spaces
+        const words = text.split(' ');
+        if (words.length < 3) return false;
+        return true;
+    }
+
+    isHeadingElement(element) {
+        return /^H\d$/i.test(element.tagName);
+    }
+
+    *iterParagraph(elem, elems) {
+        const text = elems.map(e => this.getElementText(e)).reduce((a, t) => a + t, '');
+        if (this.isSentence(text) || this.isHeadingElement(elem))
+            yield {sentence: text, elems:elems, start:0, end:elems[elems.length-1].length};
+    }
+
+    *iterElements(elem, adjacent=false, parent=false) {
+        let elems = [];
+        for (const child of elem.childNodes) {
+            if (child.nodeType == Node.TEXT_NODE) 
+                elems.push(child);
+            else {
+                const childElems = Array.from(this.iterElements(child));
+                if (childElems.length == 0) 
+                    elems.push(child);
+                else {
+                    yield* this.iterParagraph(elem, elems);
+                    yield* childElems;
+                    elems = [];
+                }
+            }
         }
+        yield* this.iterParagraph(elem, elems);
+
+        if (adjacent && elem.nextElementSibling) {
+            yield* this.iterElements(elem.nextElementSibling, true, true);
+            return;
+        }
+
+        if (!parent) return;
+        while (elem.parentNode && !elem.parentNode.nextElementSibling) 
+            elem = elem.parentNode;
+
+        if (elem.parentNode) 
+            yield* this.iterElements(elem.parentNode.nextElementSibling, true, true);
+    }
+
+    *iterSentences() {
+        yield* this.iterElements(this.getStartElement(), true, true);
     }
 }
 
+
 class TextSelectionHighlighter {
+    getTextNode(elem) {
+        if (elem.nodeType == Node.TEXT_NODE)
+            return elem;
+        if (elem.childNodes.length > 0)
+            return this.getTextNode(elem.childNodes[0]);
+        throw "not a text node";
+    }
+
     highlight(elems, start, end) {
         try {
             const first = elems[0]; 
             const last  = elems[elems.length - 1];
-            const firstText = first.childNodes[0];
-            const lastText  = last .childNodes[0];
+            const firstText = this.getTextNode(first);
+            const lastText  = this.getTextNode(last);
             end = end === undefined ? lastText.length : end;
             var range = document.createRange();
             range.setStart(firstText, Math.min(start, firstText.length));
@@ -1097,6 +1182,7 @@ class TTSReader {
         this.audioPlayback   = audioPlayback;
         this.ttsEngine       = ttsEngine;
 
+        this.maxHistory     = 5;
         this.maxPrefetch    = 2;
         this.filterWords    = true;
         this.filterURLs     = true;
@@ -1115,7 +1201,7 @@ class TTSReader {
             text = text.replace(/ ?(\[[0-9\, -]+\])|(\([^)(]*((et al.)|([0-9]{4}))[^)(]*\))/g, '');
         if (this.filterURLs)
             text = text.replace(/ ?https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)/g, '');
-        if (this.filterWords && [...text.matchAll(/[^\s]*[a-zA-Z\.\,\:-]{3,}[^\s]*/g)].length < 3)
+        if (this.filterWords && [...text.matchAll(/[^\s]*[a-zA-Z\.\,\:-\’\`]{3,}[^\s]*/g)].length < 3)
             return false;
         return text;
     }
@@ -1132,6 +1218,8 @@ class TTSReader {
                     if (!clean) continue;
                     const audio = await this.ttsEngine.fetchAudio(clean);
                     this.history.push({audio, sentence, elems, start, end});
+                    if (this.index - this.maxHistory >= 0)
+                        this.history[this.index - this.maxHistory] = null;
                     this.signalPlayback.set();
                 }
             } catch (error) {
@@ -1146,7 +1234,7 @@ class TTSReader {
             try {
                 this.isSpeaking = true;
                 this.onPlaybackStart();
-                while (this.index < this.history.length) {
+                while (this.index < this.history.length && this.history[this.index]) {
                         const {audio, sentence, elems, start, end} = this.history[this.index];
                         this.textHighlighter.highlight(elems, start, end);
                         try {
@@ -1194,7 +1282,6 @@ class TTSReader {
 
     skip(offset) {
         const index = this.index + offset;
-        console.log("index", index);
         if (this.isSpeaking && index >= 0 && index < this.history.length) {
             this.index = index;
             this.signalLoader.set();
