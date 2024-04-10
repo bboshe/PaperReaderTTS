@@ -988,10 +988,10 @@ class GoogleTranslateTTS {
 
     fetchAudioRaw(text) {
         const url = "https://www.google.com/async/translate_tts?" +
-                    `ttsp=tl:${this.language},txt:${encodeURIComponent(encodeURIComponent(text))},spd:${this.speed}`;
+                    `async=_fmt:jspb&ttsp=tl:${this.language},txt:${encodeURIComponent(encodeURIComponent(text))},spd:${this.speed}`;
         return this.fetchText(url) .then(text => {
             const jresp = JSON.parse(text.split("\n")[1]);
-            const audioData = jresp['translate_tts']['tts_data'];
+            const audioData = jresp['translate_tts'][0];
             return audioData; 
         })
     }
